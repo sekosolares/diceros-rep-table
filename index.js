@@ -8,25 +8,32 @@ class ReportTable {
    * @param {string} [orientation='PORTRAIT'] - The orientation of the report. ['PORTRAIT', 'LANDSCAPE'] - 'PORTRAIT' by default
    * @return {ReportTable} A new instance of the ReportTable class.
    */
-  constructor({ tableId, paperSize = 'LETTER', startingFolio = 1, orientation = 'PORTRAIT', marginsInMm = 15 }) {
-    console.log('ReportTable', tableId, paperSize, startingFolio, orientation, marginsInMm);
+  constructor({ tableId, paperSize = 'LETTER', startingFolio = 1, orientation = 'PORTRAIT', margin = 1.5 }) {
     this.paperSize = paperSize;
-    this.pageWidth = Page.getPageWidth(paperSize);
-    this.pageHeight = Page.getPageHeight(paperSize);
     this.startingFolio = startingFolio;
     this.currentFolio = startingFolio;
     this.tableId = tableId;
     this.table = document.getElementById(tableId);
     this.orientation = orientation;
 
+    if (orientation === 'LANDSCAPE') {
+      this.pageWidth = Page.getPageHeight(paperSize);
+      this.pageHeight = Page.getPageWidth(paperSize);
+    } else {
+      this.pageWidth = Page.getPageWidth(paperSize);
+      this.pageHeight = Page.getPageHeight(paperSize);
+    }
+
+    this.margin = margin * 10; // convert cm to mm
+    this.table.style.width = `${this.pageWidth - (this.getMarginInPx() * 2)}px`;
     this.tableHeader = this.table.querySelectorAll('thead')[0];
     this.tableBody = this.table.querySelectorAll('tbody')[0];
     this.headerHeight = this.tableHeader.offsetHeight;
     this.bodyHeight = this.tableBody.offsetHeight;
-    this.pagesToPrint = Math.ceil((this.bodyHeight + this.headerHeight) / this.pageHeight) + 1;
     this.pendingRows = [...this.tableBody.querySelectorAll('tr')];
-    this.marginsInMm = marginsInMm;
     this.newTablesList = [];
+    console.log('ReportTable:', {tableId, paperSize, startingFolio, orientation, margin, marginInPx: this.getMarginInPx(), tableHeight: this.table.offsetHeight});
+    this.table.style.width = '';
   }
 
   getTableElement = () => this.table;
@@ -36,13 +43,17 @@ class ReportTable {
   }
 
   showTable = () => {
-    this.table.style.display = 'table';
+    this.table.style.display = '';
+  }
+
+  getMarginInPx = () => {
+    const winDPI = Page.getScreenDPI();
+    return Math.ceil(Page.mmToPx(this.margin, winDPI));
   }
 
   getInitialTableHeight = () => {
-    const winDPI = Page.getScreenDPI();
-    const marginsInPx = Page.mmToPx(this.marginsInMm, winDPI);
-    return this.headerHeight + (marginsInPx * 2);
+    const marginInPx = this.getMarginInPx();
+    return Math.ceil(this.headerHeight + (marginInPx * 2));
   }
 
   getPageContainer = () => {
@@ -63,18 +74,17 @@ class ReportTable {
     newTable.classList = [...this.table.classList];
     newTable.appendChild(this.tableHeader.cloneNode(true));
 
-    let newTableHeight = this.getInitialTableHeight();
+    let newTableBodyHeight = this.getInitialTableHeight();
+    const maxTableBody = Math.ceil(this.pageHeight - newTableBodyHeight + (this.pendingRows?.reduce((acc, row) => acc + row.offsetHeight, 0) / this.pendingRows.length));
 
-    for (let idx = 0; idx < this.pendingRows.length; idx++) {
-      const row = this.pendingRows[idx];
-      if (newTableHeight + row.offsetHeight <= this.pageHeight) {
-        newTableBody.appendChild(row.cloneNode(true));
-        newTableHeight += row.offsetHeight;
-      } else {
-        this.pendingRows = this.pendingRows.slice(idx);
-        break;
-      }
-    }
+    let row = this.pendingRows.shift();
+    do {
+      newTableBody.appendChild(row.cloneNode(true));
+      newTableBodyHeight += row.offsetHeight;
+
+      row = this.pendingRows.shift();
+    } while (newTableBodyHeight + row.offsetHeight <= maxTableBody && this.pendingRows.length > 0);
+    newTableBody.appendChild(row.cloneNode(true));
 
     newTable.appendChild(newTableBody);
 
@@ -91,24 +101,21 @@ class ReportTable {
   }
 
   format = (afterFormatCallback) => {
-    if (this.pagesToPrint === 1) {
-      const container = this.getPageContainer();
 
-      container.appendChild(this.table);
-      document.body.appendChild(container);
-      return;
-    }
-
-    for(let i = 0; i < this.pagesToPrint; i++) {
+    while (this.pendingRows.length > 0) {
       this.addPageToDocument();
     }
 
+    this.table.style.width = '';
     this.hideTable();
     window.addEventListener('afterprint', () => {
       this.showTable();
       this.newTablesList.forEach(table => {
         document.body.removeChild(table);
       });
+      this.newTablesList = [];
+      this.currentFolio = this.startingFolio;
+      this.pendingRows = [...this.tableBody.querySelectorAll('tr')];
 
       if (afterFormatCallback) {
         afterFormatCallback();
@@ -153,7 +160,6 @@ class Page {
 
   static getPageSize = (paperSize) => {
     const winDPI = this.getScreenDPI();
-    console.log(winDPI);
     return this._paperSizeDimensions[paperSize][`${winDPI}DPI`] ?? [404, 404];
   }
 
